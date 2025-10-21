@@ -1,0 +1,6 @@
+
+
+# 应该包含：
+.env
+wrangler.toml
+*.secret

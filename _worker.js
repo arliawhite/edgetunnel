@@ -44,8 +44,10 @@ let path = '/?ed=2560';
 let 动态UUID = userID;
 let link = [];
 let banHosts = [atob('c3BlZWQuY2xvdWRmbGFyZS5jb20=')];
-let SCV = 'true';
+let SCV = 'false';
 let allowInsecure = '&allowInsecure=1';
+// 允许的上游域名白名单（通过环境变量 ALLOWED_HOSTS 注入）
+let __allowedHosts = [];
 // ----- 安全辅助函数 (认证 / 私网阻断 / 端口白名单 / 安全日志) -----
 const DEFAULT_ALLOWED_PORTS = new Set([80, 443, 8080, 8443, 2053, 2083, 2087, 2096]);
 
@@ -99,6 +101,22 @@ function isAllowedPort(port) {
     const p = Number(port);
     if (Number.isNaN(p)) return false;
     return DEFAULT_ALLOWED_PORTS.has(p) || httpPorts.includes(String(p)) || httpsPorts.includes(String(p));
+}
+
+// 可选：上游域名白名单（通过全局 __allowedHosts 提供）
+function isAllowedHostByEnv(hostname) {
+    try {
+        const list = (__allowedHosts || []);
+        if (!list || list.length === 0) return true; // 未配置则不限制
+        // 支持精确匹配与通配后缀 .example.com
+        return list.some(allowed => {
+            if (!allowed) return false;
+            if (allowed.startsWith('.')) return hostname.endsWith(allowed);
+            return hostname === allowed;
+        });
+    } catch (_) {
+        return true;
+    }
 }
 
 async function requireAuth(request, env) {
@@ -229,6 +247,7 @@ export default {
             const upgradeHeader = request.headers.get('Upgrade');
             const url = new URL(request.url);
             if (!upgradeHeader || upgradeHeader !== 'websocket') {
+                if (env.ALLOWED_HOSTS) __allowedHosts = await 整理(env.ALLOWED_HOSTS);
                 if (env.ADD) addresses = await 整理(env.ADD);
                 if (env.ADDAPI) addressesapi = await 整理(env.ADDAPI);
                 if (env.ADDNOTLS) addressesnotls = await 整理(env.ADDNOTLS);
@@ -252,7 +271,10 @@ export default {
                 }
                 subConfig = env.SUBCONFIG || subConfig;
                 if (url.searchParams.has('sub') && url.searchParams.get('sub') !== '') sub = url.searchParams.get('sub').toLowerCase();
-                if (url.searchParams.has('notls')) noTLS = 'true';
+                if (url.searchParams.has('notls')) {
+                    const allowNotls = (env.ALLOW_NOTLS || '').toString().toLowerCase();
+                    if (allowNotls === '1' || allowNotls === 'true') noTLS = 'true';
+                }
 
                 if (url.searchParams.has('proxyip')) {
                     path = `/proxyip=${url.searchParams.get('proxyip')}`;
@@ -644,14 +666,22 @@ async function 代理URL(代理网址, 目标网址) {
         return new Response('目标端口不允许', { status: 403 });
     }
 
+    // 额外检查：上游域名白名单
+    if (!isAllowedHostByEnv(主机名)) {
+        safeLog('代理URL 拒绝不在白名单中的主机: ' + 主机名);
+        return new Response('目标主机不允许', { status: 403 });
+    }
+
     // 反向代理请求
     let 响应 = await fetch(新网址);
 
-    // 创建新的响应
+    // 创建新的响应并设置不缓存
+    const 转发头 = new Headers(响应.headers);
+    转发头.set('Cache-Control', 'no-store');
     let 新响应 = new Response(响应.body, {
         status: 响应.status,
         statusText: 响应.statusText,
-        headers: 响应.headers
+        headers: 转发头
     });
 
     // 添加自定义头部，包含 URL 信息
